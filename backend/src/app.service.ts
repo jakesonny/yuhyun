@@ -1,8 +1,15 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { Pool } from 'pg';
 
 type IngestBody = {
   siteId: string;
@@ -17,18 +24,65 @@ type IngestBody = {
 };
 
 @Injectable()
-export class AppService {
-  private readonly db: Database.Database;
+export class AppService implements OnModuleInit, OnModuleDestroy {
+  private readonly sqliteDb?: Database.Database;
+  private readonly pgPool?: Pool;
+  private readonly storageMode: 'postgres' | 'sqlite';
 
   constructor() {
+    if (process.env.DATABASE_URL) {
+      this.storageMode = 'postgres';
+      this.pgPool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.PGSSL_DISABLE === 'true' ? false : { rejectUnauthorized: false },
+      });
+      return;
+    }
+
+    this.storageMode = 'sqlite';
     const dbPath = process.env.INGEST_DB_PATH ?? path.resolve(process.cwd(), 'data', 'ingest.db');
     const dbDir = path.dirname(dbPath);
     if (!fs.existsSync(dbDir)) {
       fs.mkdirSync(dbDir, { recursive: true });
     }
+    this.sqliteDb = new Database(dbPath);
+  }
 
-    this.db = new Database(dbPath);
-    this.db.exec(`
+  async onModuleInit() {
+    await this.initSchema();
+  }
+
+  async onModuleDestroy() {
+    if (this.pgPool) {
+      await this.pgPool.end();
+    }
+  }
+
+  private async initSchema() {
+    if (this.storageMode === 'postgres') {
+      await this.pgPool!.query(`
+        CREATE TABLE IF NOT EXISTS ingest_dedup (
+          idempotency_key TEXT PRIMARY KEY,
+          created_at TIMESTAMPTZ NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_logs (
+          id BIGSERIAL PRIMARY KEY,
+          site_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          source_file TEXT NOT NULL,
+          line_offset BIGINT NOT NULL,
+          occurred_at TIMESTAMPTZ NOT NULL,
+          raw_line TEXT NOT NULL,
+          parsed_payload_json JSONB,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          received_at TIMESTAMPTZ NOT NULL
+        );
+      `);
+      return;
+    }
+
+    this.sqliteDb!.exec(`
       CREATE TABLE IF NOT EXISTS ingest_dedup (
         idempotency_key TEXT PRIMARY KEY,
         created_at TEXT NOT NULL
@@ -49,27 +103,93 @@ export class AppService {
     `);
   }
 
-  ingest(payload: IngestBody, apiKeyHeader: string | undefined) {
+  async ingest(payload: IngestBody, apiKeyHeader: string | undefined) {
     this.validateRequiredFields(payload);
     this.validateAuth(payload, apiKeyHeader);
 
-    const dedupResult = this.db
-      .prepare(
-        `
-          INSERT OR IGNORE INTO ingest_dedup (idempotency_key, created_at)
-          VALUES (?, ?)
-        `,
-      )
-      .run(payload.idempotencyKey, new Date().toISOString());
-
-    if (dedupResult.changes === 0) {
+    const inserted = await this.insertIngestRecord(payload);
+    if (!inserted) {
       return {
         status: 'duplicate',
         idempotencyKey: payload.idempotencyKey,
       };
     }
 
-    this.db
+    return {
+      status: 'accepted',
+      idempotencyKey: payload.idempotencyKey,
+      receivedAt: new Date().toISOString(),
+    };
+  }
+
+  health() {
+    return {
+      ok: true,
+      service: 'backend',
+      storageMode: this.storageMode,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  async ingestStats() {
+    const stats = await this.getStats();
+
+    return {
+      storageMode: this.storageMode,
+      dedupCount: stats.dedupCount,
+      rawLogCount: stats.rawLogCount,
+    };
+  }
+
+  private async insertIngestRecord(payload: IngestBody): Promise<boolean> {
+    const now = new Date().toISOString();
+
+    if (this.storageMode === 'postgres') {
+      const result = await this.pgPool!.query(
+        `
+          WITH inserted_dedup AS (
+            INSERT INTO ingest_dedup (idempotency_key, created_at)
+            VALUES ($1, $2)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING idempotency_key
+          )
+          INSERT INTO raw_logs (
+            site_id, agent_id, source_file, line_offset, occurred_at,
+            raw_line, parsed_payload_json, idempotency_key, received_at
+          )
+          SELECT $3, $4, $5, $6, $7, $8, $9::jsonb, $1, $2
+          WHERE EXISTS (SELECT 1 FROM inserted_dedup)
+          RETURNING id
+        `,
+        [
+          payload.idempotencyKey,
+          now,
+          payload.siteId,
+          payload.agentId,
+          payload.sourceFile,
+          payload.offset,
+          payload.occurredAt,
+          payload.rawLine,
+          payload.parsedPayload ? JSON.stringify(payload.parsedPayload) : null,
+        ],
+      );
+      return (result.rowCount ?? 0) > 0;
+    }
+
+    const dedupResult = this.sqliteDb!
+      .prepare(
+        `
+          INSERT OR IGNORE INTO ingest_dedup (idempotency_key, created_at)
+          VALUES (?, ?)
+        `,
+      )
+      .run(payload.idempotencyKey, now);
+
+    if (dedupResult.changes === 0) {
+      return false;
+    }
+
+    this.sqliteDb!
       .prepare(
         `
           INSERT INTO raw_logs (
@@ -87,32 +207,27 @@ export class AppService {
         payload.rawLine,
         payload.parsedPayload ? JSON.stringify(payload.parsedPayload) : null,
         payload.idempotencyKey,
-        new Date().toISOString(),
+        now,
       );
-
-    return {
-      status: 'accepted',
-      idempotencyKey: payload.idempotencyKey,
-      receivedAt: new Date().toISOString(),
-    };
+    return true;
   }
 
-  health() {
-    return {
-      ok: true,
-      service: 'backend',
-      timestamp: new Date().toISOString(),
-    };
-  }
+  private async getStats(): Promise<{ dedupCount: number; rawLogCount: number }> {
+    if (this.storageMode === 'postgres') {
+      const dedup = await this.pgPool!.query<{ count: string }>('SELECT COUNT(1)::text AS count FROM ingest_dedup');
+      const raw = await this.pgPool!.query<{ count: string }>('SELECT COUNT(1)::text AS count FROM raw_logs');
+      return {
+        dedupCount: Number(dedup.rows[0]?.count ?? 0),
+        rawLogCount: Number(raw.rows[0]?.count ?? 0),
+      };
+    }
 
-  ingestStats() {
-    const dedupCountRow = this.db
+    const dedupCountRow = this.sqliteDb!
       .prepare('SELECT COUNT(1) AS count FROM ingest_dedup')
       .get() as { count: number };
-    const rawLogCountRow = this.db
+    const rawLogCountRow = this.sqliteDb!
       .prepare('SELECT COUNT(1) AS count FROM raw_logs')
       .get() as { count: number };
-
     return {
       dedupCount: dedupCountRow.count,
       rawLogCount: rawLogCountRow.count,

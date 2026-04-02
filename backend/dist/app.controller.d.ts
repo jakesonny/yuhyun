@@ -5,13 +5,15 @@ export declare class AppController {
     getHealth(): {
         ok: boolean;
         service: string;
+        storageMode: "postgres" | "sqlite";
         timestamp: string;
     };
-    getIngestStats(): {
+    getIngestStats(): Promise<{
+        storageMode: "postgres" | "sqlite";
         dedupCount: number;
         rawLogCount: number;
-    };
-    ingest(body: Record<string, unknown>, apiKeyHeader?: string): {
+    }>;
+    ingest(body: Record<string, unknown>, apiKeyHeader?: string): Promise<{
         status: string;
         idempotencyKey: string;
         receivedAt?: undefined;
@@ -19,5 +21,5 @@ export declare class AppController {
         status: string;
         idempotencyKey: string;
         receivedAt: string;
-    };
+    }>;
 }

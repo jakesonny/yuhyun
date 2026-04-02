@@ -1,3 +1,4 @@
+import { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 type IngestBody = {
     siteId: string;
     agentId: string;
@@ -9,10 +10,15 @@ type IngestBody = {
     idempotencyKey: string;
     signature: string;
 };
-export declare class AppService {
-    private readonly db;
+export declare class AppService implements OnModuleInit, OnModuleDestroy {
+    private readonly sqliteDb?;
+    private readonly pgPool?;
+    private readonly storageMode;
     constructor();
-    ingest(payload: IngestBody, apiKeyHeader: string | undefined): {
+    onModuleInit(): Promise<void>;
+    onModuleDestroy(): Promise<void>;
+    private initSchema;
+    ingest(payload: IngestBody, apiKeyHeader: string | undefined): Promise<{
         status: string;
         idempotencyKey: string;
         receivedAt?: undefined;
@@ -20,16 +26,20 @@ export declare class AppService {
         status: string;
         idempotencyKey: string;
         receivedAt: string;
-    };
+    }>;
     health(): {
         ok: boolean;
         service: string;
+        storageMode: "postgres" | "sqlite";
         timestamp: string;
     };
-    ingestStats(): {
+    ingestStats(): Promise<{
+        storageMode: "postgres" | "sqlite";
         dedupCount: number;
         rawLogCount: number;
-    };
+    }>;
+    private insertIngestRecord;
+    private getStats;
     private validateRequiredFields;
     private validateAuth;
 }
