@@ -1,0 +1,16 @@
+{
+  "backend": {
+    "apiUrl": "https://your-backend.onrender.com/api/ingest",
+    "apiKey": "replace-with-agent-api-key",
+    "hmacSecret": "replace-with-agent-hmac-secret"
+  },
+  "identity": {
+    "siteId": "site-001",
+    "agentId": "field-pc-001"
+  },
+  "watchDirs": [
+    "./sample-data"
+  ],
+  "includeFiles": [],
+  "fileExtension": ".txt"
+}

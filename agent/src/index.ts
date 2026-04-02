@@ -17,43 +17,63 @@ type AgentEvent = {
   signature: string;
 };
 
+type AgentSettings = {
+  watchDirs?: string[];
+  includeFiles?: string[];
+  fileExtension?: string;
+  backend?: {
+    apiUrl?: string;
+    apiKey?: string;
+    hmacSecret?: string;
+  };
+  identity?: {
+    siteId?: string;
+    agentId?: string;
+  };
+};
+
 const config = {
-  watchDirs: parseWatchDirs(),
-  includeFiles: parseIncludeFiles(),
+  defaultWatchDirs: parseWatchDirsFromEnv(),
+  defaultIncludeFiles: parseIncludeFilesFromEnv(),
+  settingsPath: path.resolve(process.env.AGENT_SETTINGS_PATH ?? path.resolve(process.cwd(), 'settings.json')),
   fileExtension: process.env.AGENT_FILE_EXTENSION ?? '.txt',
   dbPath: process.env.AGENT_DB_PATH ?? path.resolve(process.cwd(), 'agent-queue.db'),
   healthFilePath: process.env.AGENT_HEALTH_FILE_PATH ?? path.resolve(process.cwd(), 'agent-health.json'),
-  apiUrl: process.env.BACKEND_INGEST_URL ?? 'http://localhost:3000/api/ingest',
-  apiKey: process.env.AGENT_API_KEY ?? '',
-  hmacSecret: process.env.AGENT_HMAC_SECRET ?? '',
-  siteId: process.env.AGENT_SITE_ID ?? 'site-001',
-  agentId: process.env.AGENT_ID ?? 'field-pc-001',
+  defaultApiUrl: process.env.BACKEND_INGEST_URL ?? '',
+  defaultApiKey: process.env.AGENT_API_KEY ?? '',
+  defaultHmacSecret: process.env.AGENT_HMAC_SECRET ?? '',
+  defaultSiteId: process.env.AGENT_SITE_ID ?? 'site-001',
+  defaultAgentId: process.env.AGENT_ID ?? 'field-pc-001',
   scanIntervalMs: Number(process.env.AGENT_SCAN_INTERVAL_MS ?? '2000'),
   sendIntervalMs: Number(process.env.AGENT_SEND_INTERVAL_MS ?? '2000'),
   sendBatchSize: Number(process.env.AGENT_SEND_BATCH_SIZE ?? '100'),
   maxBackoffMs: Number(process.env.AGENT_MAX_BACKOFF_MS ?? `${5 * 60 * 1000}`),
 };
 
-if (!config.apiKey || !config.hmacSecret) {
-  console.error('[agent] AGENT_API_KEY / AGENT_HMAC_SECRET are required.');
-  process.exit(1);
-}
-
 const db = new Database(config.dbPath);
 const remainderByFile = new Map<string, Buffer>();
 let lastFlushAt: string | null = null;
 let lastFlushSuccessAt: string | null = null;
 let lastFlushError: string | null = null;
+let activeWatchDirs: string[] = [];
+let activeIncludeFiles: string[] = [];
+let activeFileExtension = config.fileExtension;
+let settingsMtimeMs = -1;
+let settingsSource: 'settings' | 'env' = 'env';
+let activeApiUrl = '';
+let activeApiKey = '';
+let activeHmacSecret = '';
+let activeSiteId = config.defaultSiteId;
+let activeAgentId = config.defaultAgentId;
 
 initDb();
-ensureWatchDirs();
-console.log(`[agent] started. watchDirs=${config.watchDirs.join(', ')}`);
-if (config.includeFiles.length > 0) {
-  console.log(`[agent] includeFiles=${config.includeFiles.join(', ')}`);
-}
+reloadTrackingTargets();
+validateRuntimeConfigOrExit();
+printTrackingTargets();
 
 setInterval(() => {
   try {
+    reloadTrackingTargets();
     scanAllTxtFiles();
   } catch (err) {
     console.error('[agent] scan error', err);
@@ -92,7 +112,7 @@ function initDb() {
   `);
 }
 
-function parseWatchDirs(): string[] {
+function parseWatchDirsFromEnv(): string[] {
   const multiple = process.env.AGENT_WATCH_DIRS;
   if (multiple && multiple.trim()) {
     return multiple
@@ -106,7 +126,7 @@ function parseWatchDirs(): string[] {
   return [path.resolve(single)];
 }
 
-function parseIncludeFiles(): string[] {
+function parseIncludeFilesFromEnv(): string[] {
   const include = process.env.AGENT_INCLUDE_FILES;
   if (!include || !include.trim()) {
     return [];
@@ -119,8 +139,8 @@ function parseIncludeFiles(): string[] {
     .map((file) => path.resolve(file));
 }
 
-function ensureWatchDirs() {
-  for (const watchDir of config.watchDirs) {
+function ensureWatchDirs(watchDirs: string[]) {
+  for (const watchDir of watchDirs) {
     if (!fs.existsSync(watchDir)) {
       fs.mkdirSync(watchDir, { recursive: true });
     }
@@ -136,10 +156,10 @@ function scanAllTxtFiles() {
     return;
   }
 
-  for (const watchDir of config.watchDirs) {
+  for (const watchDir of activeWatchDirs) {
     const files = fs
       .readdirSync(watchDir)
-      .filter((entry) => entry.endsWith(config.fileExtension))
+      .filter((entry) => entry.endsWith(activeFileExtension))
       .map((entry) => path.join(watchDir, entry));
 
     for (const file of files) {
@@ -149,12 +169,12 @@ function scanAllTxtFiles() {
 }
 
 function resolveExplicitFiles(): string[] {
-  if (config.includeFiles.length === 0) {
+  if (activeIncludeFiles.length === 0) {
     return [];
   }
 
-  const files = config.includeFiles.filter((filePath) => {
-    if (!filePath.endsWith(config.fileExtension)) {
+  const files = activeIncludeFiles.filter((filePath) => {
+    if (!filePath.endsWith(activeFileExtension)) {
       return false;
     }
     if (!fs.existsSync(filePath)) {
@@ -164,6 +184,132 @@ function resolveExplicitFiles(): string[] {
   });
 
   return Array.from(new Set(files));
+}
+
+function reloadTrackingTargets() {
+  const loaded = loadTargetsFromSettings();
+  if (loaded) {
+    activeWatchDirs = loaded.watchDirs;
+    activeIncludeFiles = loaded.includeFiles;
+    activeFileExtension = loaded.fileExtension;
+    activeApiUrl = loaded.apiUrl;
+    activeApiKey = loaded.apiKey;
+    activeHmacSecret = loaded.hmacSecret;
+    activeSiteId = loaded.siteId;
+    activeAgentId = loaded.agentId;
+    settingsSource = 'settings';
+  } else {
+    activeWatchDirs = config.defaultWatchDirs;
+    activeIncludeFiles = config.defaultIncludeFiles;
+    activeFileExtension = config.fileExtension;
+    activeApiUrl = config.defaultApiUrl;
+    activeApiKey = config.defaultApiKey;
+    activeHmacSecret = config.defaultHmacSecret;
+    activeSiteId = config.defaultSiteId;
+    activeAgentId = config.defaultAgentId;
+    settingsSource = 'env';
+  }
+  ensureWatchDirs(activeWatchDirs);
+}
+
+function loadTargetsFromSettings():
+  | {
+      watchDirs: string[];
+      includeFiles: string[];
+      fileExtension: string;
+      apiUrl: string;
+      apiKey: string;
+      hmacSecret: string;
+      siteId: string;
+      agentId: string;
+    }
+  | null {
+  if (!fs.existsSync(config.settingsPath)) {
+    return null;
+  }
+
+  const stat = fs.statSync(config.settingsPath);
+  if (stat.mtimeMs === settingsMtimeMs && (activeWatchDirs.length > 0 || activeIncludeFiles.length > 0)) {
+    return {
+      watchDirs: activeWatchDirs,
+      includeFiles: activeIncludeFiles,
+      fileExtension: activeFileExtension,
+      apiUrl: activeApiUrl,
+      apiKey: activeApiKey,
+      hmacSecret: activeHmacSecret,
+      siteId: activeSiteId,
+      agentId: activeAgentId,
+    };
+  }
+
+  settingsMtimeMs = stat.mtimeMs;
+
+  try {
+    const raw = fs.readFileSync(config.settingsPath, 'utf8');
+    const parsed = JSON.parse(raw) as AgentSettings;
+    const fileExtension = normalizeFileExtension(parsed.fileExtension ?? config.fileExtension);
+    const watchDirs = (parsed.watchDirs ?? [])
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .map((p) => path.resolve(p));
+    const includeFiles = (parsed.includeFiles ?? [])
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .map((p) => path.resolve(p));
+    const apiUrl = (parsed.backend?.apiUrl ?? '').trim();
+    const apiKey = (parsed.backend?.apiKey ?? '').trim();
+    const hmacSecret = (parsed.backend?.hmacSecret ?? '').trim();
+    const siteId = (parsed.identity?.siteId ?? config.defaultSiteId).trim() || config.defaultSiteId;
+    const agentId = (parsed.identity?.agentId ?? config.defaultAgentId).trim() || config.defaultAgentId;
+
+    return {
+      watchDirs: watchDirs.length > 0 ? watchDirs : config.defaultWatchDirs,
+      includeFiles,
+      fileExtension,
+      apiUrl,
+      apiKey,
+      hmacSecret,
+      siteId,
+      agentId,
+    };
+  } catch (err) {
+    console.error('[agent] invalid settings.json, fallback env', err);
+    return null;
+  }
+}
+
+function normalizeFileExtension(value: string) {
+  if (!value.trim()) {
+    return '.txt';
+  }
+  return value.startsWith('.') ? value : `.${value}`;
+}
+
+function printTrackingTargets() {
+  console.log(
+    `[agent] started. settingsSource=${settingsSource}, settingsPath=${config.settingsPath}, watchDirs=${activeWatchDirs.join(', ')}`,
+  );
+  console.log(`[agent] apiUrl=${activeApiUrl || '(empty)'}, agentId=${activeAgentId}, siteId=${activeSiteId}`);
+  if (activeIncludeFiles.length > 0) {
+    console.log(`[agent] includeFiles=${activeIncludeFiles.join(', ')}`);
+  }
+}
+
+function validateRuntimeConfigOrExit() {
+  const missing: string[] = [];
+  if (!activeApiUrl) {
+    missing.push('backend.apiUrl (or BACKEND_INGEST_URL)');
+  }
+  if (!activeApiKey) {
+    missing.push('backend.apiKey (or AGENT_API_KEY)');
+  }
+  if (!activeHmacSecret) {
+    missing.push('backend.hmacSecret (or AGENT_HMAC_SECRET)');
+  }
+  if (missing.length > 0) {
+    console.error(`[agent] missing required settings: ${missing.join(', ')}`);
+    process.exit(1);
+  }
 }
 
 function scanFile(filePath: string) {
@@ -239,11 +385,11 @@ function enqueueLine(sourceFile: string, rawLine: string, offset: number) {
     .update(`${sourceFile}:${offset}:${rawLine}`)
     .digest('hex');
   const signatureBase = `${idempotencyKey}:${occurredAt}:${rawLine}`;
-  const signature = createHmac('sha256', config.hmacSecret).update(signatureBase).digest('hex');
+  const signature = createHmac('sha256', activeHmacSecret).update(signatureBase).digest('hex');
 
   const payload: AgentEvent = {
-    siteId: config.siteId,
-    agentId: config.agentId,
+    siteId: activeSiteId,
+    agentId: activeAgentId,
     sourceFile,
     offset,
     occurredAt,
@@ -350,11 +496,11 @@ async function flushQueue() {
   for (const row of rows) {
     const payload = JSON.parse(row.payload_json) as AgentEvent;
     try {
-      const response = await axios.post(config.apiUrl, payload, {
+      const response = await axios.post(activeApiUrl, payload, {
         timeout: 10000,
         headers: {
           'content-type': 'application/json',
-          'x-api-key': config.apiKey,
+          'x-api-key': activeApiKey,
         },
       });
 
@@ -415,11 +561,14 @@ function writeHealthFile() {
     ok: true,
     service: 'agent',
     timestamp: now,
-    siteId: config.siteId,
-    agentId: config.agentId,
-    apiUrl: config.apiUrl,
-    watchDirs: config.watchDirs,
-    includeFiles: config.includeFiles,
+    siteId: activeSiteId,
+    agentId: activeAgentId,
+    apiUrl: activeApiUrl,
+    settingsSource,
+    settingsPath: config.settingsPath,
+    watchDirs: activeWatchDirs,
+    includeFiles: activeIncludeFiles,
+    fileExtension: activeFileExtension,
     queueCount: queueCountRow.count,
     trackedFileCount: offsetCountRow.count,
     lastFlushAt,
