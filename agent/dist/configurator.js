@@ -6,18 +6,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
+/** Ingest URL은 입력 없이 고정. 다른 서버를 쓰려면 실행 전 환경변수 `BACKEND_INGEST_URL` 또는 `settings.json`을 직접 수정. */
+const DEFAULT_BACKEND_INGEST_URL = 'https://yuhyeon.onrender.com/api/ingest';
 const settingsPath = path_1.default.resolve(process.env.AGENT_SETTINGS_PATH ?? path_1.default.resolve(process.cwd(), 'settings.json'));
 const settings = loadSettings();
 if (process.platform !== 'win32') {
     console.error('[agent-config] This configurator is supported on Windows only.');
     process.exit(1);
 }
-const apiUrl = askTextDialog('백엔드 설정', '백엔드 Ingest URL을 입력하세요 (예: https://xxxx.onrender.com/api/ingest)', settings.backend.apiUrl);
-if (!apiUrl) {
-    showInfoDialog('설정 취소', '백엔드 URL이 비어 있어 설정을 종료합니다.');
-    process.exit(1);
-}
-settings.backend.apiUrl = apiUrl.trim();
+settings.backend.apiUrl =
+    (process.env.BACKEND_INGEST_URL ?? '').trim() || settings.backend.apiUrl.trim() || DEFAULT_BACKEND_INGEST_URL;
 const apiKey = askTextDialog('백엔드 설정', 'Agent API Key를 입력하세요', settings.backend.apiKey);
 if (!apiKey) {
     showInfoDialog('설정 취소', 'API Key가 비어 있어 설정을 종료합니다.');
@@ -168,17 +166,6 @@ function pickFolderDialog() {
     }
     const output = (result.stdout ?? '').trim();
     return output || null;
-}
-function askYesNoDialog(title, message) {
-    const escapedMessage = message.replace(/'/g, "''");
-    const escapedTitle = title.replace(/'/g, "''");
-    const script = [
-        'Add-Type -AssemblyName PresentationFramework',
-        `$res = [System.Windows.MessageBox]::Show('${escapedMessage}','${escapedTitle}','YesNo','Question')`,
-        'if ($res -eq [System.Windows.MessageBoxResult]::Yes) { [Console]::Write("YES") } else { [Console]::Write("NO") }',
-    ].join('; ');
-    const result = (0, child_process_1.spawnSync)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
-    return (result.stdout ?? '').trim() === 'YES';
 }
 function askTextDialog(title, message, defaultValue = '') {
     const escapedMessage = message.replace(/'/g, "''");

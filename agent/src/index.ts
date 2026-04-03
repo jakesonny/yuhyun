@@ -188,6 +188,7 @@ function resolveExplicitFiles(): string[] {
 
 function reloadTrackingTargets() {
   const loaded = loadTargetsFromSettings();
+
   if (loaded) {
     activeWatchDirs = loaded.watchDirs;
     activeIncludeFiles = loaded.includeFiles;
@@ -256,6 +257,7 @@ function loadTargetsFromSettings():
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
       .map((p) => path.resolve(p));
+
     const apiUrl = (parsed.backend?.apiUrl ?? '').trim();
     const apiKey = (parsed.backend?.apiKey ?? '').trim();
     const hmacSecret = (parsed.backend?.hmacSecret ?? '').trim();

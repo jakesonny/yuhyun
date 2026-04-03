@@ -1,11 +1,24 @@
 param(
   [string]$ServiceName = "YuhyunIngestAgent",
   [string]$NssmPath = "",
-  [string]$AgentExePath = ".\dist\agent.exe",
+  [string]$AgentExePath = "",
   [string]$WorkingDirectory = "."
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-AgentExePath {
+  param([string]$Requested)
+  if ($Requested -and (Test-Path $Requested)) {
+    return (Resolve-Path $Requested).Path
+  }
+  foreach ($candidate in @(".\agent.exe", ".\dist\agent.exe")) {
+    if (Test-Path $candidate) {
+      return (Resolve-Path $candidate).Path
+    }
+  }
+  throw "agent.exe not found. Run from release folder (with agent.exe) or repo root (with dist\agent.exe), or pass -AgentExePath."
+}
 
 function Resolve-NssmPath {
   param([string]$Requested)
@@ -28,12 +41,8 @@ function Resolve-NssmPath {
   throw "nssm.exe not found. Put nssm.exe in agent folder or pass -NssmPath."
 }
 
-if (!(Test-Path $AgentExePath)) {
-  throw "agent exe not found: $AgentExePath"
-}
-
 $resolvedNssmPath = Resolve-NssmPath -Requested $NssmPath
-$resolvedAgentExePath = (Resolve-Path $AgentExePath).Path
+$resolvedAgentExePath = Resolve-AgentExePath -Requested $AgentExePath
 $resolvedWorkDir = (Resolve-Path $WorkingDirectory).Path
 
 & $resolvedNssmPath stop $ServiceName | Out-Null

@@ -9,7 +9,10 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "build:exe": "npm run build && pkg dist/index.js --targets node18-win-x64 --output dist/agent.exe",
-    "build:config:exe": "npm run build && pkg dist/configurator.js --targets node18-win-x64 --output dist/agent-config.exe"
+    "build:config:exe": "npm run build && pkg dist/configurator.js --targets node18-win-x64 --output dist/agent-config.exe",
+    "build:agents:exe": "npm run build && pkg dist/index.js --targets node18-win-x64 --output dist/agent.exe && pkg dist/configurator.js --targets node18-win-x64 --output dist/agent-config.exe",
+    "release:pack": "node scripts/package-release.mjs",
+    "fetch:nssm": "node scripts/fetch-nssm.mjs"
   },
   "keywords": [],
   "author": "",

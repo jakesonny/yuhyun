@@ -6,3 +6,8 @@ planner/
 .env.*
 **/.env
 **/.env.*
+
+# Local release artifacts
+release/
+release.zip
+*.zip

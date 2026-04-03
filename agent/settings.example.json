@@ -1,6 +1,6 @@
 {
   "backend": {
-    "apiUrl": "https://your-backend.onrender.com/api/ingest",
+    "apiUrl": "https://yuhyeon.onrender.com/api/ingest",
     "apiKey": "replace-with-agent-api-key",
     "hmacSecret": "replace-with-agent-hmac-secret"
   },
