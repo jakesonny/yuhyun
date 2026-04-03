@@ -7,6 +7,9 @@ planner/
 **/.env
 **/.env.*
 
+# Agent: Windows pkg용 SQLite 네이티브 (빌드 시 fetch)
+agent/better_sqlite3.node
+
 # Local release artifacts
 release/
 release.zip

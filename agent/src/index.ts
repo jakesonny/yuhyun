@@ -32,6 +32,18 @@ type AgentSettings = {
   };
 };
 
+/** pkg 로 만든 exe 는 better-sqlite3 네이티브가 스냅샷에 없음 → exe 옆 better_sqlite3.node 사용 */
+function resolveBetterSqliteNativeBinding(): string | undefined {
+  const besideExe = path.join(path.dirname(process.execPath), 'better_sqlite3.node');
+  const cwd = path.join(process.cwd(), 'better_sqlite3.node');
+  for (const p of [besideExe, cwd]) {
+    if (fs.existsSync(p)) {
+      return path.resolve(p);
+    }
+  }
+  return undefined;
+}
+
 const config = {
   defaultWatchDirs: parseWatchDirsFromEnv(),
   defaultIncludeFiles: parseIncludeFilesFromEnv(),
@@ -50,7 +62,10 @@ const config = {
   maxBackoffMs: Number(process.env.AGENT_MAX_BACKOFF_MS ?? `${5 * 60 * 1000}`),
 };
 
-const db = new Database(config.dbPath);
+const nativeBinding = resolveBetterSqliteNativeBinding();
+const db = nativeBinding
+  ? new Database(config.dbPath, { nativeBinding })
+  : new Database(config.dbPath);
 const remainderByFile = new Map<string, Buffer>();
 let lastFlushAt: string | null = null;
 let lastFlushSuccessAt: string | null = null;

@@ -54,6 +54,7 @@ const copies = [
   [path.join(agentDir, 'settings.example.json'), path.join(releaseDir, 'settings.example.json')],
   [path.join(agentDir, 'dist', 'agent.exe'), path.join(releaseDir, 'agent.exe')],
   [path.join(agentDir, 'dist', 'agent-config.exe'), path.join(releaseDir, 'agent-config.exe')],
+  [path.join(agentDir, 'better_sqlite3.node'), path.join(releaseDir, 'better_sqlite3.node')],
 ];
 
 const notes = [];
@@ -62,7 +63,11 @@ for (const [from, to] of copies) {
   const ok = copyFile(from, to);
   const base = path.basename(from);
   if (!ok) {
-    if (base === 'agent.exe' || base === 'agent-config.exe') {
+    if (base === 'better_sqlite3.node') {
+      notes.push(
+        'better_sqlite3.node 없음 — pkg는 SQLite 네이티브를 포함하지 않습니다. agent 폴더에서 npm run fetch:sqlite:win 후 release:pack 을 다시 실행하세요.',
+      );
+    } else if (base === 'agent.exe' || base === 'agent-config.exe') {
       notes.push(`${base} 없음 — agent 폴더에서 npm run build:agents:exe 실행 후 npm run release:pack 을 다시 실행하세요.`);
     } else {
       notes.push(`복사 실패: ${base}`);
@@ -105,9 +110,10 @@ fs.writeFileSync(
     '유현건설 계측 에이전트 배포 묶음 (v2)',
     '',
     '포함:',
-    '  agent.exe          수집 에이전트',
-    '  agent-config.exe   설정 (API 키·HMAC·폴더)',
-    '  nssm.exe           Windows 서비스 등록용 (있을 때)',
+    '  agent.exe             수집 에이전트',
+    '  agent-config.exe      설정 (API 키·HMAC·폴더)',
+    '  better_sqlite3.node   agent.exe와 같은 폴더에서 로드 (필수)',
+    '  nssm.exe              Windows 서비스 등록용 (있을 때)',
     '  scripts/           서비스 설치·제거',
     '  INSTALL_GUIDE.md   설치 절차',
     '  settings.example.json  설정 파일 예시',

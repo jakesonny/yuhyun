@@ -3,6 +3,7 @@
 ## 0) 준비 파일
 
 - `agent.exe`
+- `better_sqlite3.node` (**`agent.exe`와 같은 폴더** — SQLite 큐용; 없으면 agent 실행 시 오류)
 - `agent-config.exe`
 - `scripts/install-service.bat`
 - `scripts/uninstall-service.bat`
@@ -28,11 +29,13 @@
 에이전트 디렉터리에서:
 
 ```bash
+npm install
 npm run build:agents:exe
 npm run release:pack
 ```
 
-- 상위 폴더에 **`release/`** 가 생기며, zip으로 묶어 배포하면 됩니다 (`agent.exe`, `agent-config.exe`, `scripts/`, 안내 문서 등).
+- `build:agents:exe` 전에 **Win용 `better_sqlite3.node`를 받아** `agent/better_sqlite3.node`에 둡니다(스크립트에 포함). `agent-config.exe`에는 SQLite를 쓰지 않아 별도 `.node`가 필요 없습니다.
+- 상위 폴더에 **`release/`** 가 생기며, zip으로 묶어 배포하면 됩니다 (`agent.exe`, **`better_sqlite3.node`**, `agent-config.exe`, `scripts/` 등).
 - `nssm.exe`는 기본적으로 `agent/nssm.exe`가 `release/`로 복사됩니다. 없을 때만 `release/NSSM-안내.txt`가 생성됩니다. 갱신이 필요하면 `npm run fetch:nssm`을 실행하세요.
 
 개별 빌드만 할 때:

@@ -9,6 +9,17 @@ const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const crypto_1 = require("crypto");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+/** pkg 로 만든 exe 는 better-sqlite3 네이티브가 스냅샷에 없음 → exe 옆 better_sqlite3.node 사용 */
+function resolveBetterSqliteNativeBinding() {
+    const besideExe = path_1.default.join(path_1.default.dirname(process.execPath), 'better_sqlite3.node');
+    const cwd = path_1.default.join(process.cwd(), 'better_sqlite3.node');
+    for (const p of [besideExe, cwd]) {
+        if (fs_1.default.existsSync(p)) {
+            return path_1.default.resolve(p);
+        }
+    }
+    return undefined;
+}
 const config = {
     defaultWatchDirs: parseWatchDirsFromEnv(),
     defaultIncludeFiles: parseIncludeFilesFromEnv(),
@@ -26,7 +37,10 @@ const config = {
     sendBatchSize: Number(process.env.AGENT_SEND_BATCH_SIZE ?? '100'),
     maxBackoffMs: Number(process.env.AGENT_MAX_BACKOFF_MS ?? `${5 * 60 * 1000}`),
 };
-const db = new better_sqlite3_1.default(config.dbPath);
+const nativeBinding = resolveBetterSqliteNativeBinding();
+const db = nativeBinding
+    ? new better_sqlite3_1.default(config.dbPath, { nativeBinding })
+    : new better_sqlite3_1.default(config.dbPath);
 const remainderByFile = new Map();
 let lastFlushAt = null;
 let lastFlushSuccessAt = null;
